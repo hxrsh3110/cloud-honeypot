@@ -51,7 +51,4 @@ sudo docker logs live-trap
 2.	Extract and parse attacker IP data from the container:
 sudo docker exec live-trap cat threat-logs.txt | grep -oE "\b([0-9]{1,3}\.){3}[0-9]{1,3}\b" | sort | uniq -c | sort -nr
  
-Is the instance is already made. And want to get the project live again after a PC Shut down. 
-S1. Open the AWS console -> EC2 -> Dashboard
-S2. Click on ‘Security Groups’ -> Click on the Group associated with your project -> Click Inbound Rules -> Edit Inbound Rules
-S3. Delete the existing IP address of SSH port 22. -> Click on custom dropdown -> Click on MyIP -> Save the changes and use the IPv4 from Instances in the Terminal to continue.
+
