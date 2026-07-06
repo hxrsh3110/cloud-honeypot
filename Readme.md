@@ -37,6 +37,7 @@ ssh -i ~/.ssh/xyz-server-key.pem ubuntu@<NEW_AWS_PUBLIC_IP>
 sudo apt update && sudo apt install docker.io git -y
 2.	Pull the codebase to the cloud:
 git clone <YOUR_GITHUB_REPO_URL>
+
 cd cloud-honeypot
 
 3.	Build the container image:
