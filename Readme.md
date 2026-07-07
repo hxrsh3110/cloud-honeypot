@@ -37,11 +37,18 @@ sudo chown -R 1000:1000 ~/honeypot-logs
 
 If you skip this, the app won't crash, it'll just silently fail every write and print `Failed to save log.` to `docker logs` while the container looks perfectly healthy. This bit us once during setup and is the single easiest way to think this is working when it isn't.
 
+## Monitoring
+
+A cron job runs `health-check.sh` every 5 minutes, checks whether the `live-trap` container is up, and logs the result to `~/honeypot-logs/health.log`. On every healthy check it also pings a [healthchecks.io](https://healthchecks.io) endpoint. If that ping goes silent for longer than the configured period plus grace window, healthchecks.io sends an email automatically. This is what actually closes the loop, a log file nobody reads isn't a monitor, an external service that notices your silence is.
+
+Current settings: 10 minute period, 5 minute grace, so a real outage takes up to about 15 minutes to trigger an email. That's a deliberate tradeoff for a low-traffic honeypot, not a hard requirement, tighten it if that's too slow for your needs.
+
 ## Deployment
 
 ### 1. Launch the EC2 instance
 
-- Ubuntu 24.04 LTS, t2.micro
+- Ubuntu 24.04 LTS
+- Allocate an Elastic IP and associate it with the instance. Without this, EC2 hands you a new public IP on every stop/start, which means re-editing your security group's SSH rule every time you restart the box. With it, the address is fixed for good.
 - Security group inbound rules:
   - Port 22 (SSH), source: your IP only
   - Port 2222 (honeypot), source: anywhere
@@ -118,15 +125,18 @@ scp -i ~/.ssh/your-key.pem ubuntu@<PUBLIC_IP>:~/honeypot-logs/threat-logs.txt ./
 
 ## Stopping and starting to save cost
 
-Stopping the instance instead of terminating it keeps the disk, the docker setup, and the logs intact for less than a dollar a month in storage.
-
-Because EC2 gives you a new public IP on every stop/start by default, you currently have to update your security group's SSH rule and re-copy the new IP every time you restart the box. An Elastic IP would remove this step entirely — this hasn't been set up yet, see Known Gaps.
+Stopping the instance instead of terminating it keeps the disk, the docker setup, and the logs intact for less than a dollar a month in storage. With the Elastic IP attached, the public address doesn't change across a stop/start, so there's no need to touch the security group or look up a new IP each time.
 
 When resuming:
 
 ```bash
-# on AWS console: start the instance, note the new public IP if no Elastic IP is attached
-ssh -i ~/.ssh/your-key.pem ubuntu@<NEW_PUBLIC_IP>
+# on AWS console: start the instance
+ssh -i ~/.ssh/your-key.pem ubuntu@<ELASTIC_IP>
+```
+
+The container comes back on its own thanks to `--restart unless-stopped`, but if you ever need to start it manually:
+
+```bash
 docker start live-trap
 ```
 
@@ -134,8 +144,7 @@ docker start live-trap
 
 Being upfront about what's not done, instead of implying it is:
 
-- **No Elastic IP.** The public IP changes on every restart, which means manually updating the security group each time. A five-minute fix that just hasn't been done yet.
 - **No Infrastructure as Code.** The whole EC2 setup above is manual console clicking. If this instance died right now, rebuilding it means redoing every step by hand from memory. Terraform for this is the next planned piece of work, not yet started.
-- **No CI/CD or image scanning.** Nothing checks this Docker image for known vulnerabilities before it gets deployed.
+- **No CI/CD or image scanning.** Nothing checks this Docker image for known vulnerabilities before it gets deployed. Planned next.
 - **Minimal interaction.** It logs a connection and an IP, nothing about attempted usernames or passwords, which is where a lot of the more interesting attacker behavior data would come from.
-- **Single log file, no rotation.** `threat-logs.txt` grows forever with no size limit or rotation policy.
+- **Monitoring has a real blind spot.** The health check relies on cron running at all. If cron itself dies, or the whole instance goes down, the healthchecks.io grace window still catches it eventually because silence itself is the alert condition, but there's no independent check confirming cron is alive day to day.
