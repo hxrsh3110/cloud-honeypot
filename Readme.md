@@ -49,6 +49,16 @@ Every push to `main` triggers a GitHub Actions workflow (`.github/workflows/dock
 
 Worth being clear about what this does and doesn't cover: it only runs when code gets pushed to GitHub. It does not run continuously against the live instance, and it does not auto-deploy anything, the rebuild and redeploy on the server is still a manual step. Its actual value shows up the next time a change gets pushed and the base image has moved on since the last build, new CVEs get caught before they ship, instead of an old, silently-stale image just running forever because nothing ever prompted a re-check.
 
+## Infrastructure as Code
+
+The AWS side, the security group, the EC2 instance, and the Elastic IP, is tracked in Terraform under `infra/main.tf`. This wasn't built from scratch, the infrastructure already existed from manual console setup, so it was brought under Terraform with `terraform import`, which tells Terraform "this resource already exists with this ID, track it instead of creating something new." That's a different process from the more commonly taught "write the file, then create fresh," and it's worth naming as such rather than implying otherwise.
+
+The first `terraform plan` after importing showed real drift: the security group's actual name (`launch-wizard-7`, an AWS-generated default from the original console setup, never renamed) and description didn't match what was first written into the file, and one ingress rule had the wrong source IP entirely. That plan output would have destroyed and recreated the live security group if applied without checking it first, for the seconds in between, the instance would have had no security group at all. The file was corrected to match reality instead of applying, and `terraform plan` was re-run until it reported "No changes. Your infrastructure matches the configuration."
+
+What this actually provides: a version-controlled, accurate description of the AWS-level infrastructure, and the ability to run `terraform plan` at any time to check whether reality has silently drifted from what's documented. What it does not yet provide: full one-command disaster recovery. If the instance were lost, Terraform could recreate the security group, instance, and Elastic IP shape, but installing Docker, cloning the repo, and building the container inside it is still a manual step, not yet folded into the Terraform config.
+
+`infra/terraform.tfstate` and `infra/.terraform/` are gitignored and never pushed, since state files can contain sensitive detail about the real infrastructure. Only `main.tf`, `.gitignore`, and the provider lock file are meant to be committed.
+
 ## Monitoring
 
 A cron job runs `health-check.sh` every 5 minutes, checks whether the `live-trap` container is up, and logs the result to `~/honeypot-logs/health.log`. On every healthy check it also pings a [healthchecks.io](https://healthchecks.io) endpoint. If that ping goes silent for longer than the configured period plus grace window, healthchecks.io sends an email automatically. This is what actually closes the loop, a log file nobody reads isn't a monitor, an external service that notices your silence is.
@@ -175,7 +185,7 @@ tail -1 ~/honeypot-logs/threat-logs.txt
 
 Being upfront about what's not done, instead of implying it is:
 
-- **No Infrastructure as Code.** The whole EC2 setup above is manual console clicking. If this instance died right now, rebuilding it means redoing every step by hand from memory. Terraform for this is the next planned piece of work, not yet started.
+- **Terraform covers AWS resources, not what runs inside them.** The security group, instance, and Elastic IP are in code and verified against reality. Installing Docker, cloning the repo, and building the container on a fresh instance is still manual, not yet a `user_data` script or otherwise automated.
 - **CI builds and scans, but doesn't deploy.** The pipeline catches vulnerabilities before they'd ship, but getting the fixed image onto the actual running instance is still a manual step.
 - **Minimal interaction.** It logs a connection and an IP, nothing about attempted usernames or passwords, which is where a lot of the more interesting attacker behavior data would come from.
 - **Monitoring has a real blind spot.** The health check relies on cron running at all. If cron itself dies, or the whole instance goes down, the healthchecks.io grace window still catches it eventually because silence itself is the alert condition, but there's no independent check confirming cron is alive day to day.
