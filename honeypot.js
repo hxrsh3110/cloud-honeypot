@@ -1,39 +1,65 @@
 const net = require('net');
-const fs = require('fs'); // Native Node module for reading/writing files
+const fs = require('fs');
 const path = require('path');
 
-const PORT = 2222; // We use 2222 as our fake SSH port
+const PORT = 2222;
 const LOG_PATH = path.join(__dirname, 'logs', 'threat-logs.txt');
+const CONNECTION_TIMEOUT_MS = 15000;
 
-// Create the trap server
+function sanitize(input) {
+  return input.replace(/[\x00-\x1F\x7F]/g, '').slice(0, 100);
+}
+
+function logAttempt(ip, username, password, status) {
+  const timestamp = new Date().toISOString();
+  const logEntry = `[${timestamp}] IP: ${ip} | Username: ${username || '-'} | Password: ${password || '-'} | Status: ${status}\n`;
+  console.log(logEntry.trim());
+  fs.appendFile(LOG_PATH, logEntry, (err) => {
+    if (err) console.log("Failed to save log.");
+  });
+}
+
 const server = net.createServer((socket) => {
-    // 1. Grab the IP address of whoever just connected and clean IPv4-mapped IPv6 addresses
-    let attackerIP = socket.remoteAddress;
-    if (attackerIP && attackerIP.startsWith('::ffff:')) {
-        attackerIP = attackerIP.slice(7);
+  let attackerIP = socket.remoteAddress;
+  if (attackerIP && attackerIP.startsWith('::ffff:')) {
+    attackerIP = attackerIP.slice(7);
+  }
+
+  let state = 'username';
+  let username = '';
+  let buffer = '';
+
+  const timeout = setTimeout(() => {
+    logAttempt(attackerIP, username, null, 'timeout');
+    socket.destroy();
+  }, CONNECTION_TIMEOUT_MS);
+
+  socket.write("Ubuntu 24.04 LTS (GNU/Linux)\r\nlogin: ");
+
+  socket.on('data', (data) => {
+    buffer += data.toString();
+    if (buffer.includes('\n')) {
+      const line = sanitize(buffer.split('\n')[0].replace('\r', ''));
+      buffer = '';
+
+      if (state === 'username') {
+        username = line;
+        state = 'password';
+        socket.write("Password: ");
+      } else if (state === 'password') {
+        const password = line;
+        clearTimeout(timeout);
+        logAttempt(attackerIP, username, password, 'complete');
+        socket.write("\r\nLogin incorrect\r\n");
+        setTimeout(() => socket.destroy(), 1000);
+      }
     }
-    
-    const timestamp = new Date().toISOString();
-    const logEntry = `[${timestamp}] Unauthorized access attempt from: ${attackerIP}\n`;
+  });
 
-    // 2. Print it to our terminal so we can watch it live
-    console.log(logEntry.trim());
-
-    // 3. Save it permanently to a text file using the absolute path
-    fs.appendFile(LOG_PATH, logEntry, (err) => {
-        if (err) console.log("Failed to save log.");
-    });
-
-    // 4. Send a fake login prompt to trick the bot into thinking it found a real server
-    socket.write("Ubuntu 24.04 LTS (GNU/Linux)\nlogin: ");
-
-    // 5. Kick them out after 2 seconds so they don't consume our server memory
-    setTimeout(() => {
-        socket.destroy();
-    }, 2000);
+  socket.on('error', () => clearTimeout(timeout));
+  socket.on('close', () => clearTimeout(timeout));
 });
 
-// Start listening on all available network interfaces (0.0.0.0)
 server.listen(PORT, '0.0.0.0', () => {
-    console.log(`[+] Security Honeypot active. Listening on port ${PORT}...`);
+  console.log(`[+] Security Honeypot active. Listening on port ${PORT}...`);
 });
